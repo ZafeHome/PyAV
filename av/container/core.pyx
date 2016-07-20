@@ -1,4 +1,5 @@
 from libc.stdint cimport int64_t
+from cython.operator cimport dereference as deref
 from libc.stdlib cimport malloc, free
 
 import sys
@@ -10,6 +11,8 @@ from av.container.output cimport OutputContainer
 from av.container.pyio cimport pyio_read, pyio_write, pyio_seek
 from av.format cimport build_container_format
 from av.utils cimport err_check, dict_to_avdict
+from av.container.core cimport cb_info
+from av.utils cimport gettimeofday
 
 from av.dictionary import Dictionary # not cimport
 from av.logging import Capture as LogCapture # not cimport
@@ -25,6 +28,18 @@ except ImportError:
 
 cdef object _cinit_sentinel = object()
 
+
+
+cdef int interrupt_cb (void *p):
+    cdef timeval curr_time
+    gettimeofday(&curr_time, NULL)
+    cdef cb_info callback_info = deref(<cb_info*> p)
+    cdef double curr_time_in_ms = (curr_time.tv_sec) * 1000 + (curr_time.tv_usec) / 1000
+    cdef double start_time_in_ms = (callback_info.start_time.tv_sec) * 1000 + (callback_info.start_time.tv_usec) / 1000
+
+    if curr_time_in_ms - start_time_in_ms > callback_info.timeout:
+        return 1
+    return 0
 
 
 cdef class ContainerProxy(object):
@@ -67,6 +82,8 @@ cdef class ContainerProxy(object):
         else:
             # We need the context before we open the input AND setup Python IO.
             self.ptr = lib.avformat_alloc_context()
+            self.ptr.interrupt_callback.callback = interrupt_cb
+            self.ptr.interrupt_callback.opaque = &self.callback_info
 
         self.ptr.flags |= lib.AVFMT_FLAG_GENPTS
         self.ptr.max_analyze_duration = 10000000
@@ -107,6 +124,8 @@ cdef class ContainerProxy(object):
         if not self.writeable:
             ifmt = container.format.iptr if container.format else NULL
             options = container.options.copy()
+            self.__set_callback_timeout__(container.open_timeout)
+            self.__reset_start_time__()
             with nogil:
                 res = lib.avformat_open_input(
                     &self.ptr,
@@ -142,6 +161,13 @@ cdef class ContainerProxy(object):
             # these two together. This is safe to call after the avformat_close_input
             # above, so *shrugs*.
             lib.avformat_free_context(self.ptr)
+
+
+    def __set_callback_timeout__(self, timeout):
+        self.callback_info.timeout = timeout
+
+    def __reset_start_time__(self):
+        gettimeofday(&self.callback_info.start_time, NULL)
 
     cdef seek(self, int stream_index, offset, str whence, bint backward, bint any_frame):
 
@@ -196,6 +222,11 @@ cdef class Container(object):
         if sentinel is not _cinit_sentinel:
             raise RuntimeError('cannot construct base Container')
 
+        timeouts = options.pop('timeouts', {}) if options else {}
+        timeouts = timeouts if timeouts is not None else {}
+        self.open_timeout = int(timeouts.get('open_timeout', 30000))
+        self.read_timeout = int(timeouts.get('read_timeout', 3000))
+
         self.writeable = isinstance(self, OutputContainer)
         if not self.writeable and not isinstance(self, InputContainer):
             raise RuntimeError('Container cannot be extended except')
@@ -239,6 +270,7 @@ def open(file, mode=None, format=None, options=None, metadata_encoding=None, met
     :param str mode: ``"r"`` for reading and ``"w"`` for writing.
     :param str format: Specific format to use. Defaults to autodect.
     :param dict options: Options to pass to the container and streams.
+        -> options['timeouts']: {"open_timeout": open_timeout, "read_timeout": read_timeout}.
     :param str metadata_encoding: Encoding to use when reading or writing file metadata.
         Defaults to utf-8, except no decoding is performed by default when
         reading on Python 2 (returning ``str`` instead of ``unicode``).
