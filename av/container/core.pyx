@@ -1,3 +1,4 @@
+from cython.operator cimport dereference as deref
 from libc.stdint cimport uint8_t, int64_t
 from libc.stdlib cimport malloc, free
 from libc.string cimport memcpy
@@ -90,6 +91,18 @@ cdef int64_t pyio_seek_gil(void *opaque, int64_t offset, int whence):
 cdef object _cinit_sentinel = object()
 
 
+cdef int _expTime = 1000
+
+cdef extern from "stdio.h" nogil:
+    int printf (const char *template, ...)
+
+cdef int interrupt_cb (void *p):
+    cdef int expTime = deref(<int*> p)
+    printf("callback exptime: %d\n", expTime)
+    if expTime < 100:
+        return 1
+    return 0
+
 
 cdef class ContainerProxy(object):
 
@@ -128,6 +141,7 @@ cdef class ContainerProxy(object):
         else:
             # We need the context before we open the input AND setup Python IO.
             self.ptr = lib.avformat_alloc_context()
+            self.__set_timeoutcallback__(1111)
 
         # Setup Python IO.
         if self.file is not None:
@@ -188,6 +202,12 @@ cdef class ContainerProxy(object):
                     lib.av_freep(&self.buffer)
                 if self.iocontext:
                     lib.av_freep(&self.iocontext)
+
+    def __set_timeoutcallback__(self, timeout):
+        global _expTime
+        _expTime = timeout
+        self.ptr.interrupt_callback.callback = interrupt_cb
+        self.ptr.interrupt_callback.opaque = &_expTime
 
     cdef seek(self, int stream_index, lib.int64_t timestamp, str mode, bint backward, bint any_frame):
 

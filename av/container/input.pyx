@@ -74,6 +74,8 @@ cdef class InputContainer(Container):
         cdef Packet packet
         cdef int ret
 
+        self.proxy.__set_timeoutcallback__(2222)
+
         try:
 
             for i in range(self.proxy.ptr.nb_streams):
