@@ -91,15 +91,38 @@ cdef int64_t pyio_seek_gil(void *opaque, int64_t offset, int whence):
 cdef object _cinit_sentinel = object()
 
 
-cdef int _expTime = 1000
+from posix.types cimport suseconds_t, time_t
+
+cdef extern from "time.h" nogil:
+
+    cdef struct timezone:
+        int tz_minuteswest
+        int dsttime
+
+    cdef struct timeval:
+        time_t      tv_sec
+        suseconds_t tv_usec
+
+    int gettimeofday(timeval *tp, timezone *tzp)
 
 cdef extern from "stdio.h" nogil:
     int printf (const char *template, ...)
 
+cdef int timeout_time_in_mill
+cdef timeval start_time
+cdef timeval curr_time
+
+# first time initialization
+gettimeofday(&start_time, NULL)
+
 cdef int interrupt_cb (void *p):
+    gettimeofday(&curr_time, NULL)
+    cdef double curr_time_in_mill = (curr_time.tv_sec) * 1000 + (curr_time.tv_usec) / 1000
+    cdef double start_time_in_mill = (start_time.tv_sec) * 1000 + (start_time.tv_usec) / 1000
     cdef int expTime = deref(<int*> p)
-    printf("callback exptime: %d\n", expTime)
-    if expTime < 100:
+
+    # printf("callback: exptime=%d, delta=%f\n", expTime, curr_time_in_mill - start_time_in_mill)
+    if curr_time_in_mill - start_time_in_mill > expTime:
         return 1
     return 0
 
@@ -141,7 +164,7 @@ cdef class ContainerProxy(object):
         else:
             # We need the context before we open the input AND setup Python IO.
             self.ptr = lib.avformat_alloc_context()
-            self.__set_timeoutcallback__(1111)
+            self.__set_callback_timeout__(container.open_timeout)
 
         # Setup Python IO.
         if self.file is not None:
@@ -203,11 +226,15 @@ cdef class ContainerProxy(object):
                 if self.iocontext:
                     lib.av_freep(&self.iocontext)
 
-    def __set_timeoutcallback__(self, timeout):
-        global _expTime
-        _expTime = timeout
+    def __set_callback_timeout__(self, timeout):
+        global timeout_time_in_mill
+        timeout_time_in_mill = timeout
         self.ptr.interrupt_callback.callback = interrupt_cb
-        self.ptr.interrupt_callback.opaque = &_expTime
+        self.ptr.interrupt_callback.opaque = &timeout_time_in_mill
+
+    def __reset_start_time__(self):
+        global start_time
+        gettimeofday(&start_time, NULL)
 
     cdef seek(self, int stream_index, lib.int64_t timestamp, str mode, bint backward, bint any_frame):
 
@@ -256,6 +283,11 @@ cdef class Container(object):
         if sentinel is not _cinit_sentinel:
             raise RuntimeError('cannot construct base Container')
 
+        timeouts = options.pop('timeouts', {}) if options else {}
+        timeouts = timeouts if timeouts is not None else {}
+        self.open_timeout = int(timeouts.get('open_timeout', 30000))
+        self.read_timeout = int(timeouts.get('read_timeout', 3000))
+
         self.writeable = isinstance(self, OutputContainer)
         if not self.writeable and not isinstance(self, InputContainer):
             raise RuntimeError('Container cannot be extended except')
@@ -276,6 +308,8 @@ cdef class Container(object):
         if format_name is None:
             self.format = build_container_format(self.proxy.ptr.iformat, self.proxy.ptr.oformat)
 
+
+
     def __repr__(self):
         return '<av.%s %r>' % (self.__class__.__name__, self.file or self.name)
 
@@ -290,6 +324,7 @@ def open(file, mode=None, format=None, options=None):
     :param str mode: ``"r"`` for reading and ``"w"`` for writing.
     :param str format: Specific format to use. Defaults to autodect.
     :param dict options: Options to pass to the container and streams.
+        -> options['timeouts']: {"open_timeout": open_timeout, "read_timeout": read_timeout}.
 
     For devices (via `libavdevice`), pass the name of the device to ``format``,
     e.g.::
