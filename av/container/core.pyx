@@ -105,15 +105,12 @@ cdef extern from "time.h" nogil:
 
     int gettimeofday(timeval *tp, timezone *tzp)
 
-cdef extern from "stdio.h" nogil:
-    int printf (const char *template, ...)
+# cdef extern from "stdio.h" nogil:
+#     int printf (const char *template, ...)
 
 cdef int timeout_time_in_mill
 cdef timeval start_time
 cdef timeval curr_time
-
-# first time initialization
-gettimeofday(&start_time, NULL)
 
 cdef int interrupt_cb (void *p):
     gettimeofday(&curr_time, NULL)
@@ -196,13 +193,14 @@ cdef class ContainerProxy(object):
             self.iocontext.seekable = lib.AVIO_SEEKABLE_NORMAL
             self.iocontext.max_packet_size = self.bufsize
             self.ptr.pb = self.iocontext
-            #self.ptr.flags = lib.AVFMT_FLAG_CUSTOM_IO
+            self.ptr.flags = lib.AVFMT_FLAG_CUSTOM_IO
 
         cdef lib.AVInputFormat *ifmt
         cdef _Dictionary options
         if not self.writeable:
             ifmt = container.format.iptr if container.format else NULL
             options = container.options.copy()
+            self.__reset_start_time__()
             with nogil:
                 res = lib.avformat_open_input(
                     &self.ptr,
