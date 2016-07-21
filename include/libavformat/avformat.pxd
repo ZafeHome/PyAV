@@ -81,7 +81,7 @@ cdef extern from "libavformat/avformat.pyav.h" nogil:
         int(*read_packet)(void *opaque, uint8_t *buf, int buf_size),
         int(*write_packet)(void *opaque, uint8_t *buf, int buf_size),
         int64_t(*seek)(void *opaque, int64_t offset, int whence)
-    )   
+    )
 
     # http://ffmpeg.org/doxygen/trunk/structAVInputFormat.html
     cdef struct AVInputFormat:
@@ -138,7 +138,12 @@ cdef extern from "libavformat/avformat.pyav.h" nogil:
     cdef AVInputFormat* av_find_input_format(const char *name)
     cdef AVInputFormat* av_iformat_next(AVInputFormat*)
     cdef AVOutputFormat* av_oformat_next(AVOutputFormat*)
-    
+
+    # http://ffmpeg.org/doxygen/trunk/structAVIOInterruptCB.html
+    cdef struct AVIOInterruptCB:
+        int (*callback)(void*)
+        void *opaque
+
     # http://ffmpeg.org/doxygen/trunk/structAVFormatContext.html
     cdef struct AVFormatContext:
         
@@ -152,7 +157,9 @@ cdef extern from "libavformat/avformat.pyav.h" nogil:
         AVIOContext *pb
         
         AVDictionary *metadata
-        
+
+        AVIOInterruptCB interrupt_callback
+
         char filename
         int64_t start_time
         int64_t duration

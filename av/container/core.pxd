@@ -51,3 +51,6 @@ cdef class Container(object):
     cdef readonly StreamContainer streams
     cdef readonly dict metadata
 
+    cdef readonly int open_timeout
+    cdef readonly int read_timeout
+
