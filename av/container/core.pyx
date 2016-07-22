@@ -11,6 +11,8 @@ from av.container.input cimport InputContainer
 from av.container.output cimport OutputContainer
 from av.format cimport build_container_format
 from av.utils cimport err_check, stash_exception, dict_to_avdict
+from av.container.core cimport cb_info
+from av.utils cimport gettimeofday
 
 from av.dictionary import Dictionary # not cimport
 from av.utils import AVError # not cimport
@@ -91,35 +93,19 @@ cdef int64_t pyio_seek_gil(void *opaque, int64_t offset, int whence):
 cdef object _cinit_sentinel = object()
 
 
-from posix.types cimport suseconds_t, time_t
-
-cdef extern from "time.h" nogil:
-
-    cdef struct timezone:
-        int tz_minuteswest
-        int dsttime
-
-    cdef struct timeval:
-        time_t      tv_sec
-        suseconds_t tv_usec
-
-    int gettimeofday(timeval *tp, timezone *tzp)
-
 # cdef extern from "stdio.h" nogil:
 #     int printf (const char *template, ...)
 
-cdef int timeout_time_in_mill
-cdef timeval start_time
-cdef timeval curr_time
 
 cdef int interrupt_cb (void *p):
+    cdef timeval curr_time
     gettimeofday(&curr_time, NULL)
-    cdef double curr_time_in_mill = (curr_time.tv_sec) * 1000 + (curr_time.tv_usec) / 1000
-    cdef double start_time_in_mill = (start_time.tv_sec) * 1000 + (start_time.tv_usec) / 1000
-    cdef int expTime = deref(<int*> p)
+    cdef cb_info callback_info = deref(<cb_info*> p)
+    cdef double curr_time_in_ms = (curr_time.tv_sec) * 1000 + (curr_time.tv_usec) / 1000
+    cdef double start_time_in_ms = (callback_info.start_time.tv_sec) * 1000 + (callback_info.start_time.tv_usec) / 1000
+    # printf("callback: exptime=%d, delta=%f\n", callback_info.timeout, curr_time_in_ms - start_time_in_ms)
 
-    # printf("callback: exptime=%d, delta=%f\n", expTime, curr_time_in_mill - start_time_in_mill)
-    if curr_time_in_mill - start_time_in_mill > expTime:
+    if curr_time_in_ms - start_time_in_ms > callback_info.timeout:
         return 1
     return 0
 
@@ -161,7 +147,8 @@ cdef class ContainerProxy(object):
         else:
             # We need the context before we open the input AND setup Python IO.
             self.ptr = lib.avformat_alloc_context()
-            self.__set_callback_timeout__(container.open_timeout)
+            self.ptr.interrupt_callback.callback = interrupt_cb
+            self.ptr.interrupt_callback.opaque = &self.callback_info
 
         # Setup Python IO.
         if self.file is not None:
@@ -200,6 +187,7 @@ cdef class ContainerProxy(object):
         if not self.writeable:
             ifmt = container.format.iptr if container.format else NULL
             options = container.options.copy()
+            self.__set_callback_timeout__(container.open_timeout)
             self.__reset_start_time__()
             with nogil:
                 res = lib.avformat_open_input(
@@ -225,14 +213,10 @@ cdef class ContainerProxy(object):
                     lib.av_freep(&self.iocontext)
 
     def __set_callback_timeout__(self, timeout):
-        global timeout_time_in_mill
-        timeout_time_in_mill = timeout
-        self.ptr.interrupt_callback.callback = interrupt_cb
-        self.ptr.interrupt_callback.opaque = &timeout_time_in_mill
+        self.callback_info.timeout = timeout
 
     def __reset_start_time__(self):
-        global start_time
-        gettimeofday(&start_time, NULL)
+        gettimeofday(&self.callback_info.start_time, NULL)
 
     cdef seek(self, int stream_index, lib.int64_t timestamp, str mode, bint backward, bint any_frame):
 
