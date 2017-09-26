@@ -38,7 +38,7 @@ level_map = {
 # While we start with the level quite low, Python defaults to INFO, and so
 # they will not show. The logging system can add significant overhead, so
 # be wary of dropping this lower.
-cdef int _level_threshold = lib.AV_LOG_INFO
+cdef int _level_threshold = lib.AV_LOG_ERROR
 
 # ... but lets limit ourselves to WARNING immediately.
 logging.getLogger('libav').setLevel(logging.WARNING)
